@@ -1,101 +1,116 @@
-# Week 1 Enterprise RAG - Production-Structured Notebook Pack
+# NexaBank RAG Notebooks
 
-This project turns the Week 1 learning sequence into small, runnable notebooks. Each notebook is self-contained, reads from `data/nexabank_data`, and mirrors the production-style behavior in `src/week1_rag` without importing it.
+A self-contained notebook project for learning an enterprise retrieval-augmented
+generation (RAG) workflow with LangChain, OpenAI, and MongoDB Atlas Vector Search.
+The included policies and evaluation questions are synthetic.
+
+## Project contents
+
+```text
+data/nexabank_data/
+├── fictional_policies/       # 12 canonical Markdown policies
+├── pdf_exports/              # 3 derived PDF examples; not indexed by default
+├── document_metadata.csv     # policy metadata and allowed groups
+├── evaluation_questions.csv  # 60 retrieval/RAG questions
+└── evaluation_questions.jsonl
+
+notebooks/
+├── 00_setup_and_architecture.ipynb
+├── 01_document_loading.ipynb
+└── 02_chunking_and_metadata.ipynb
+```
+
+Each notebook runs independently from a fresh kernel and reads directly from
+`data/nexabank_data`.
+
+## Notebook guide
+
+| Notebook | Purpose |
+|---|---|
+| `00_setup_and_architecture.ipynb` | End-to-end architecture, local validation, optional OpenAI embeddings, MongoDB ingestion, retrieval, and RAG |
+| `01_document_loading.ipynb` | Canonical Markdown loading, metadata enrichment, provenance, and schema validation |
+| `02_chunking_and_metadata.ipynb` | LangChain recursive chunking, deterministic chunk IDs, and metadata preservation |
 
 ## Architecture
 
 ```text
-OFFLINE INGESTION
-NexaBank Markdown policies + CSV metadata
-    -> LangChain loaders
+Markdown policies + CSV metadata
+    -> LangChain Documents
     -> RecursiveCharacterTextSplitter
-    -> OpenAI text-embedding-3-small (768 dimensions)
-    -> MongoDB Vector Search
-
-ONLINE RAG
-Question
-    -> same embedding space used at ingestion
-    -> MongoDB Vector Search retriever
-    -> top-k documents
-    -> LangChain prompt + ChatOpenAI (GPT-6 Luna)
-    -> grounded answer + source documents
+    -> deterministic chunk IDs
+    -> OpenAI text-embedding-3-small
+    -> MongoDB Atlas Vector Search
+    -> authorization-filtered retrieval
+    -> OpenAI grounded answer
 ```
 
-## Notebook order
-
-1. `00_setup_and_architecture.ipynb`
-2. `01_document_loading.ipynb`
-3. `02_chunking_and_metadata.ipynb`
-4. `03_embedding_provider.ipynb`
-5. `04_mongodb_vector_ingestion.ipynb`
-6. `05_semantic_retrieval.ipynb`
-7. `06_parent_document_retrieval.ipynb`
-8. `07_rag_generation.ipynb`
-9. `08_production_checks.ipynb`
+The Markdown policies are the canonical corpus. The PDFs are derived copies and
+are excluded from normal ingestion to prevent duplicate retrieval results.
 
 ## Setup
+
+Requires Python 3.11 or newer.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-# Windows: .venv\Scripts\activate
-pip install -e .
+
+python -m pip install \
+  jupyterlab python-dotenv pypdf pymongo \
+  langchain langchain-community langchain-text-splitters \
+  langchain-openai langchain-mongodb
+
 cp .env.example .env
 jupyter lab
 ```
 
-The notebooks always run their local dataset checks. External operations are
-opt-in so opening or executing a notebook does not write to MongoDB or call a
-model unexpectedly:
+On Windows, activate the environment with `.venv\Scripts\activate`.
 
-```bash
-RUN_EMBEDDING_CHECK=1   # notebook 03
-RUN_VECTOR_INGESTION=1  # notebook 04
-RUN_VECTOR_BOOTSTRAP=1 RUN_RETRIEVAL=1  # notebook 05, new collection
-RUN_PARENT_INGESTION=1 RUN_PARENT_RETRIEVAL=1  # notebook 06
-RUN_VECTOR_BOOTSTRAP=1 RUN_RAG=1        # notebook 07, new collection
-RUN_VECTOR_BOOTSTRAP=1 RUN_PRODUCTION_CHECKS=1 # notebook 08, new collection
+## Configuration
+
+Set these values in `.env` before enabling live operations:
+
+```dotenv
+OPENAI_API_KEY=...
+MONGODB_URI=...
 ```
 
-Add `OPENAI_API_KEY` to `.env` before enabling any model-backed cell. The key is
-never placed in notebook source or printed by the notebooks.
+The supplied defaults use:
 
-## OpenAI model choices
+- `gpt-6-luna` for answer generation;
+- `text-embedding-3-small` with 768 dimensions for embeddings; and
+- `policy_chunks_openai_768` as the MongoDB vector collection.
 
-- `gpt-6-luna` is the default answer model because this workload is focused,
-  high-volume policy question answering. Generation uses no reasoning and is
-  capped at 400 output tokens.
-- `text-embedding-3-small` is the default embedding model. Vectors are shortened
-  from 1,536 to 768 dimensions to reduce MongoDB storage and index size.
-- Ingestion batches embedding requests and skips sources whose checksum and
-  chunk count have not changed.
-- If authorized retrieval returns no context, the application answers without
-  making an LLM request.
+Never commit `.env` or place credentials directly in notebook cells.
 
-The embedding provider, model, and dimensions are stored in MongoDB. Never mix
-different embedding spaces in one collection. Use a fresh collection such as
-`policy_chunks_openai_768` when migrating from the previous embedding setup.
+## Running live operations
 
-## Production decisions demonstrated
+Notebook 00 runs local loading and validation by default. External calls and
+database writes are controlled by opt-in environment flags:
 
-- credentials come from environment variables, not notebook source;
-- each notebook can run from a fresh kernel without executing an earlier notebook;
-- notebook-local code mirrors `src/week1_rag` while loading the corpus directly from `data/nexabank_data`;
-- source and chunk IDs are deterministic;
-- the canonical Markdown policies are indexed without their duplicate PDF exports;
-- policy metadata is attached to every LangChain `Document` and chunk;
-- `allowed_groups` is enforced as a MongoDB Vector Search pre-filter before retrieval;
-- unchanged sources are not re-embedded on repeated ingestion runs;
-- changed sources are replaced instead of blindly duplicated;
-- the embedding provider, model, and vector dimensions are persisted and checked;
-- MongoDB's LangChain integration is used rather than a custom vector-store wrapper;
-- MongoDB's parent-document retriever is used rather than reimplementing that pattern;
-- the project uses LangChain's dedicated OpenAI chat and embedding integrations.
+| Flag | Action |
+|---|---|
+| `RUN_EMBEDDING_CHECK=1` | Make one OpenAI embedding check |
+| `RUN_MONGODB_CHECK=1` | Ping MongoDB and read stored embedding configuration |
+| `RUN_VECTOR_INGESTION=1` | Create/update the vector index and embed changed policies |
+| `RUN_RAG=1` | Retrieve authorized context and generate an answer |
 
-## Official references used
+After editing `.env`, restart the kernel or rerun the notebook's setup and
+configuration cells.
 
-- MongoDB LangChain integration: https://www.mongodb.com/docs/atlas/ai-integrations/langchain/
-- MongoDB Vector Search filtering: https://www.mongodb.com/docs/vector-search/query/aggregation-stages/vector-search-stage/
-- MongoDB parent document retrieval: https://www.mongodb.com/docs/atlas/ai-integrations/langchain/parent-document-retrieval/
-- OpenAI model catalog: https://developers.openai.com/api/docs/models
-- OpenAI embeddings guide: https://developers.openai.com/api/docs/guides/embeddings
+## Safety and cost controls
+
+- Retrieval applies `allowed_groups` as a MongoDB pre-filter before similarity
+  ranking.
+- Provider, embedding model, and vector dimensions are stored and checked before
+  reuse. Use a new collection when changing the embedding space.
+- Unchanged source files are not embedded again.
+- Changed or incomplete sources are replaced rather than duplicated.
+- Generation disables reasoning and caps output at 400 tokens by default.
+- No authorized context means no chat-model request.
+
+## Dataset notice
+
+All organizations, policies, dates, owners, metrics, and rules in the NexaBank
+dataset are fictional and intended only for training and demonstration. They are
+not banking, regulatory, legal, or security requirements.
